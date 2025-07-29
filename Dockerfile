@@ -1,25 +1,32 @@
-FROM golang:1.20.1-alpine AS build
-RUN apk add --no-cache git ca-certificates
-WORKDIR /src/app
-COPY . .
-RUN go build -o /app
+# Build stage
+FROM golang:1.20.1-alpine AS builder
 
-FROM alpine
+# Install needed tools
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /src/app
+
+# Reduce cache invalidation by copying go.mod first
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN go build -ldflags="-s -w" -o /app
+
+# Final minimal stage
+FROM alpine:latest
+
 RUN apk add --no-cache ca-certificates
 
-# Copy built binary
-COPY --from=build /app /app
+# Add a non-root user for security
+RUN addgroup -S app && adduser -S app -G app
+USER app
 
-# Uncomment to support GCP registry auth
-# COPY key.json /key.json
-# ENV GOOGLE_APPLICATION_CREDENTIALS=/key.json
+COPY --from=builder /app /app
 
-# Optional labels for image clarity
-LABEL org.opencontainers.image.source="https://github.com/kubenotes/KubeForge"
-LABEL org.opencontainers.image.title="GHCR Proxy"
-LABEL org.opencontainers.image.description="A Docker Registry V2 reverse proxy with TLS support"
+# Expose as HTTP by default (let DO handle TLS)
+EXPOSE 8080
 
-# You can expose port 443 here if using TLS directly in the container
-EXPOSE 443
+HEALTHCHECK CMD wget --no-verbose --tries=1 --spider http://localhost:8080/ || exit 1
 
 ENTRYPOINT ["/app"]
