@@ -34,7 +34,6 @@ const (
 )
 
 var (
-	re                 = regexp.MustCompile(`^/v2/`)
 	realm              = regexp.MustCompile(`realm="(.*?)"`)
 )
 
