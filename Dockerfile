@@ -7,7 +7,7 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /src/app
 
 # Reduce cache invalidation by copying go.mod first
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN go mod download
 
 COPY . .
