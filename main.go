@@ -192,8 +192,9 @@ func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 		req.Host = c.host
 		req.URL.Scheme = "https"
 		req.URL.Host = c.host
-		if req.URL.Path != "/v2/" {
-			req.URL.Path = re.ReplaceAllString(req.URL.Path, fmt.Sprintf("/v2/%s/", c.repoPrefix))
+		if strings.HasPrefix(req.URL.Path, "/v2/") && req.URL.Path != "/v2/" {
+		    suffix := strings.TrimPrefix(req.URL.Path, "/v2/")
+		    req.URL.Path = fmt.Sprintf("/v2/%s/%s", c.repoPrefix, suffix)
 		}
 		log.Printf("rewrote url: %s into %s", u, req.URL)
 	}
