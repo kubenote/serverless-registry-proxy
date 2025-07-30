@@ -188,31 +188,31 @@ func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 		req.URL.Host = c.host
 
 		if req.URL.Path == "/v2/" {
-			// Don't rewrite the ping endpoint
 			log.Printf("passing through /v2/ ping without rewriting")
 		} else if strings.HasPrefix(req.URL.Path, "/v2/") {
-			// Extract original suffix and map it to hardcoded repo
+			// This handles /v2/<fakeRepo>/manifests/<tag>
 			parts := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/v2/"), "/", 3)
-		
-			if len(parts) >= 2 && parts[1] == "manifests" {
-				if len(parts) == 3 {
-					tag := parts[2]
-					log.Printf("⚓ pulling tag: %s", tag)
-				}
-			}
-		
-			// Rewrite the path using first segment
-			if len(parts) >= 2 {
-				req.URL.Path = "/v2/kubenote/kubeforge/" + strings.Join(parts[1:], "/")
+
+			// Match: /v2/<anything>/manifests/<tag>
+			if len(parts) == 3 && parts[1] == "manifests" {
+				tag := parts[2]
+				log.Printf("⚓ pulling tag: %s", tag)
+
+				// Always map to hardcoded repo with dynamic tag
+				req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", tag)
+			} else if len(parts) == 1 && parts[0] != "" {
+				// Handle docker pull get.kubefor.ge/<tag> (with no /v2/ suffix)
+				log.Printf("⚓ pulling tag: %s", parts[0])
+				req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", parts[0])
 			} else {
 				req.URL.Path = "/v2/kubenote/kubeforge"
 			}
 		}
 
-
 		log.Printf("rewrote url: %s into %s", orig, req.URL)
 	}
 }
+
 
 
 type registryRoundtripper struct {
