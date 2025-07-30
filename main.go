@@ -23,7 +23,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -82,10 +81,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	if browserRedirects {
-		mux.Handle("/", browserRedirectHandler(reg))
-	}
-	if tokenEndpoint != "" {
-		mux.Handle("/_token", tokenProxyHandler(tokenEndpoint))
+		mux.Handle("/", browserRedirectHandler())
 	}
 	mux.Handle("/v2/", registryAPIProxy(reg, auth))
 
