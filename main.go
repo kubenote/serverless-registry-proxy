@@ -1,18 +1,3 @@
-/*
-Copyright 2020 Google LLC
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    https://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
 package main
 
 import (
@@ -34,15 +19,14 @@ const (
 )
 
 var (
-	re                 = regexp.MustCompile(`^/v2/`)
-	realm              = regexp.MustCompile(`realm="(.*?)"`)
+	re    = regexp.MustCompile(`^/v2/`)
+	realm = regexp.MustCompile(`realm="(.*?)"`)
 )
 
 type myContextKey string
 
 type registryConfig struct {
-	host       string
-	repoPrefix string
+	host string
 }
 
 func main() {
@@ -58,14 +42,9 @@ func main() {
 	if registryHost == "" {
 		log.Fatal("REGISTRY_HOST environment variable not specified (example: gcr.io)")
 	}
-	repoPrefix := os.Getenv("REPO_PREFIX")
-	if repoPrefix == "" {
-		log.Fatal("REPO_PREFIX environment variable not specified")
-	}
 
 	reg := registryConfig{
-		host:       registryHost,
-		repoPrefix: repoPrefix,
+		host: registryHost,
 	}
 
 	tokenEndpoint, err := discoverTokenService(reg.host)
@@ -91,7 +70,7 @@ func main() {
 		mux.Handle("/", browserRedirectHandler(reg))
 	}
 	if tokenEndpoint != "" {
-		mux.Handle("/_token", tokenProxyHandler(tokenEndpoint, repoPrefix))
+		mux.Handle("/_token", tokenProxyHandler(tokenEndpoint))
 	}
 	mux.Handle("/v2/", registryAPIProxy(reg, auth))
 
@@ -127,7 +106,6 @@ func discoverTokenService(registryHost string) (string, error) {
 	return matches[1], nil
 }
 
-// captureHostHeader is a middleware to capture Host header in a context key.
 func captureHostHeader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		ctx := context.WithValue(req.Context(), ctxKeyOriginalHost, req.Host)
@@ -136,11 +114,7 @@ func captureHostHeader(next http.Handler) http.Handler {
 	})
 }
 
-// tokenProxyHandler proxies the token requests to the specified token service.
-// It adjusts the ?scope= parameter in the query from "repository:foo:..." to
-// "repository:repoPrefix/foo:.." and reverse proxies the query to the specified
-// tokenEndpoint.
-func tokenProxyHandler(tokenEndpoint, repoPrefix string) http.HandlerFunc {
+func tokenProxyHandler(tokenEndpoint string) http.HandlerFunc {
 	return (&httputil.ReverseProxy{
 		FlushInterval: -1,
 		Director: func(r *http.Request) {
@@ -151,7 +125,7 @@ func tokenProxyHandler(tokenEndpoint, repoPrefix string) http.HandlerFunc {
 			if scope == "" {
 				return
 			}
-			newScope := strings.Replace(scope, "repository:", fmt.Sprintf("repository:%s/", repoPrefix), 1)
+			newScope := strings.Replace(scope, "repository:", "repository:kubenote/kubeforge", 1)
 			q.Set("scope", newScope)
 			u, _ := url.Parse(tokenEndpoint)
 			u.RawQuery = q.Encode()
@@ -162,18 +136,13 @@ func tokenProxyHandler(tokenEndpoint, repoPrefix string) http.HandlerFunc {
 	}).ServeHTTP
 }
 
-// browserRedirectHandler redirects a request like example.com/my-image to
-// REGISTRY_HOST/my-image, which shows a public UI for browsing the registry.
-// This works only on registries that support a web UI when the image name is
-// entered into the browser, like GCR (gcr.io/google-containers/busybox).
 func browserRedirectHandler(cfg registryConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		url := fmt.Sprintf("https://%s/%s%s", cfg.host, cfg.repoPrefix, r.RequestURI)
+		url := fmt.Sprintf("https://%s/kubenote/kubeforge%s", cfg.host, r.RequestURI)
 		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 	}
 }
 
-// registryAPIProxy returns a reverse proxy to the specified registry.
 func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 	return (&httputil.ReverseProxy{
 		FlushInterval: -1,
@@ -184,8 +153,6 @@ func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 	}).ServeHTTP
 }
 
-// rewriteRegistryV2URL rewrites request.URL like /v2/* that come into the server
-// into https://[GCR_HOST]/v2/[PROJECT_ID]/*. It leaves /v2/ as is.
 func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 	return func(req *http.Request) {
 		u := req.URL.String()
@@ -193,7 +160,7 @@ func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 		req.URL.Scheme = "https"
 		req.URL.Host = c.host
 		if req.URL.Path != "/v2/" {
-			req.URL.Path = re.ReplaceAllString(req.URL.Path, fmt.Sprintf("/v2/%s/", c.repoPrefix))
+			req.URL.Path = re.ReplaceAllString(req.URL.Path, "/v2/kubenote/kubeforge/")
 		}
 		log.Printf("rewrote url: %s into %s", u, req.URL)
 	}
@@ -223,8 +190,6 @@ func (rrt *registryRoundtripper) RoundTrip(req *http.Request) (*http.Response, e
 		return nil, err
 	}
 
-	// Google Artifact Registry sends a "location: /artifacts-downloads/..." URL
-	// to download blobs. We don't want these routed to the proxy itself.
 	if locHdr := resp.Header.Get("location"); req.Method == http.MethodGet &&
 		resp.StatusCode == http.StatusFound && strings.HasPrefix(locHdr, "/") {
 		resp.Header.Set("location", req.URL.Scheme+"://"+req.URL.Host+locHdr)
@@ -234,10 +199,6 @@ func (rrt *registryRoundtripper) RoundTrip(req *http.Request) (*http.Response, e
 	return resp, nil
 }
 
-// updateTokenEndpoint modifies the response header like:
-//    Www-Authenticate: Bearer realm="https://auth.docker.io/token",service="registry.docker.io"
-// to point to the https://host/token endpoint to force using local token
-// endpoint proxy.
 func updateTokenEndpoint(resp *http.Response, host string) {
 	v := resp.Header.Get("www-authenticate")
 	if v == "" {
