@@ -189,17 +189,23 @@ func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 // into https://[GCR_HOST]/v2/[PROJECT_ID]/*. It leaves /v2/ as is.
 func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 	return func(req *http.Request) {
-		u := req.URL.String()
+		original := req.URL.String()
+
 		req.Host = c.host
 		req.URL.Scheme = "https"
 		req.URL.Host = c.host
-		if strings.HasPrefix(req.URL.Path, "/v2/") && req.URL.Path != "/v2/" {
-		    suffix := strings.TrimPrefix(req.URL.Path, "/v2/")
-		    req.URL.Path = fmt.Sprintf("/v2/%s/%s", c.repoPrefix, suffix)
-		}
-		log.Printf("rewrote url: %s into %s", u, req.URL)
+
+		// Force every path to hit kubenote/kubeforge
+		// Example: /v2/ → /v2/kubenote/kubeforge
+		//          /v2/... → /v2/kubenote/kubeforge/...
+		prefix := "/v2/"
+		suffix := strings.TrimPrefix(req.URL.Path, prefix)
+		req.URL.Path = fmt.Sprintf("%s%s/%s", prefix, c.repoPrefix, suffix)
+
+		log.Printf("[proxy] forcibly rewrote url: %s → %s", original, req.URL)
 	}
 }
+
 
 type registryRoundtripper struct {
 	auth authenticator
