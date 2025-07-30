@@ -171,11 +171,14 @@ func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 		req.URL.Scheme = "https"
 		req.URL.Host = c.host
 
-		if strings.HasPrefix(req.URL.Path, "/v2/") && req.URL.Path != "/v2/" {
+		if req.URL.Path == "/v2/" {
+			// Don't rewrite the ping endpoint
+			log.Printf("passing through /v2/ ping without rewriting")
+		} else if strings.HasPrefix(req.URL.Path, "/v2/") {
+			// Extract original suffix and map it to hardcoded repo
 			parts := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/v2/"), "/", 2)
 			if len(parts) == 2 {
-				suffix := parts[1] // discard the original image name
-				req.URL.Path = "/v2/kubenote/kubeforge/" + suffix
+				req.URL.Path = "/v2/kubenote/kubeforge/" + parts[1]
 			} else {
 				req.URL.Path = "/v2/kubenote/kubeforge"
 			}
