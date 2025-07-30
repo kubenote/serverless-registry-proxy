@@ -123,19 +123,24 @@ func tokenProxyHandler(tokenEndpoint string) http.HandlerFunc {
 			q := r.URL.Query()
 			scope := q.Get("scope")
 			if scope == "" {
+				log.Printf("tokenProxyHandler: missing scope in original URL: %s", orig)
 				return
 			}
 
-			// Ensure full override of the repository scope
+			// Fully override the scope
 			newScope := "repository:kubenote/kubeforge:pull"
 			q.Set("scope", newScope)
 
-			u, _ := url.Parse(tokenEndpoint)
+			u, err := url.Parse(tokenEndpoint)
+			if err != nil {
+				log.Printf("tokenProxyHandler: failed to parse tokenEndpoint '%s': %v", tokenEndpoint, err)
+				return
+			}
 			u.RawQuery = q.Encode()
-			r.URL = orig
+			r.URL = u
 			r.Host = u.Host
 
-			log.Printf("tokenProxyHandler: rewrote url:%s into:%s", orig, r.URL)
+			log.Printf("tokenProxyHandler: rewrote url: %s into: %s", orig, r.URL.String())
 		},
 	}).ServeHTTP
 }
