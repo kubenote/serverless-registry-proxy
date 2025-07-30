@@ -192,13 +192,23 @@ func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 			log.Printf("passing through /v2/ ping without rewriting")
 		} else if strings.HasPrefix(req.URL.Path, "/v2/") {
 			// Extract original suffix and map it to hardcoded repo
-			parts := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/v2/"), "/", 2)
-			if len(parts) == 2 {
-				req.URL.Path = "/v2/kubenote/kubeforge/" + parts[1]
+			parts := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/v2/"), "/", 3)
+		
+			if len(parts) >= 2 && parts[1] == "manifests" {
+				if len(parts) == 3 {
+					tag := parts[2]
+					log.Printf("⚓ pulling tag: %s", tag)
+				}
+			}
+		
+			// Rewrite the path using first segment
+			if len(parts) >= 2 {
+				req.URL.Path = "/v2/kubenote/kubeforge/" + strings.Join(parts[1:], "/")
 			} else {
 				req.URL.Path = "/v2/kubenote/kubeforge"
 			}
 		}
+
 
 		log.Printf("rewrote url: %s into %s", orig, req.URL)
 	}
