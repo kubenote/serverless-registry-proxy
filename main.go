@@ -204,34 +204,23 @@ type registryRoundtripper struct {
 }
 
 func (rrt *registryRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	log.Printf("request received. url=%s", req.URL)
+    // Log full request
+    dump, err := httputil.DumpRequestOut(req, true)
+    if err == nil {
+        log.Printf("REQUEST:\n%s", dump)
+    }
 
-	if rrt.auth != nil {
-		req.Header.Set("Authorization", rrt.auth.AuthHeader())
-	}
+    resp, err := http.DefaultTransport.RoundTrip(req)
 
-	origHost := req.Context().Value(ctxKeyOriginalHost).(string)
-	if ua := req.Header.Get("user-agent"); ua != "" {
-		req.Header.Set("user-agent", "gcr-proxy/0.1 customDomain/"+origHost+" "+ua)
-	}
+    // Log full response
+    if err == nil {
+        resDump, _ := httputil.DumpResponse(resp, true)
+        log.Printf("RESPONSE:\n%s", resDump)
+    } else {
+        log.Printf("request failed with error: %+v", err)
+    }
 
-	resp, err := http.DefaultTransport.RoundTrip(req)
-	if err == nil {
-		log.Printf("request completed (status=%d) url=%s", resp.StatusCode, req.URL)
-	} else {
-		log.Printf("request failed with error: %+v", err)
-		return nil, err
-	}
-
-	// Google Artifact Registry sends a "location: /artifacts-downloads/..." URL
-	// to download blobs. We don't want these routed to the proxy itself.
-	if locHdr := resp.Header.Get("location"); req.Method == http.MethodGet &&
-		resp.StatusCode == http.StatusFound && strings.HasPrefix(locHdr, "/") {
-		resp.Header.Set("location", req.URL.Scheme+"://"+req.URL.Host+locHdr)
-	}
-
-	updateTokenEndpoint(resp, origHost)
-	return resp, nil
+    return resp, err
 }
 
 // updateTokenEndpoint modifies the response header like:
