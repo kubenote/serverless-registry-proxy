@@ -165,16 +165,26 @@ func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 
 func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 	return func(req *http.Request) {
-		u := req.URL.String()
+		orig := req.URL.String()
+
 		req.Host = c.host
 		req.URL.Scheme = "https"
 		req.URL.Host = c.host
-		if req.URL.Path != "/v2/" {
-			req.URL.Path = re.ReplaceAllString(req.URL.Path, "/v2/kubenote/kubeforge/")
+
+		if strings.HasPrefix(req.URL.Path, "/v2/") && req.URL.Path != "/v2/" {
+			parts := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/v2/"), "/", 2)
+			if len(parts) == 2 {
+				suffix := parts[1] // discard the original image name
+				req.URL.Path = "/v2/kubenote/kubeforge/" + suffix
+			} else {
+				req.URL.Path = "/v2/kubenote/kubeforge"
+			}
 		}
-		log.Printf("rewrote url: %s into %s", u, req.URL)
+
+		log.Printf("rewrote url: %s into %s", orig, req.URL)
 	}
 }
+
 
 type registryRoundtripper struct {
 	auth authenticator
