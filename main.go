@@ -145,7 +145,7 @@ func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 		FlushInterval: -1,
 		Director:      rewriteRegistryV2URL(cfg),
 		Transport: &registryRoundtripper{
-			auth: auth,
+			auth: authHeader(""), // no hardcoded auth
 		},
 	}).ServeHTTP
 }
@@ -186,24 +186,15 @@ type registryRoundtripper struct {
 }
 
 func (rrt *registryRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
-    // Log full request
-    dump, err := httputil.DumpRequestOut(req, true)
-    if err == nil {
-        log.Printf("REQUEST:\n%s", dump)
-    }
+	// Do not inject Authorization if the client already set one
+	if req.Header.Get("Authorization") == "" && rrt.auth != nil {
+		req.Header.Set("Authorization", rrt.auth.AuthHeader())
+	}
 
-    resp, err := http.DefaultTransport.RoundTrip(req)
-
-    // Log full response
-    if err == nil {
-        resDump, _ := httputil.DumpResponse(resp, true)
-        log.Printf("RESPONSE:\n%s", resDump)
-    } else {
-        log.Printf("request failed with error: %+v", err)
-    }
-
-    return resp, err
+	// Forward the request
+	return http.DefaultTransport.RoundTrip(req)
 }
+
 
 
 
