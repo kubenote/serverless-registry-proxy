@@ -182,31 +182,26 @@ func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 	return func(req *http.Request) {
 		orig := req.URL.String()
-
 		req.Host = c.host
 		req.URL.Scheme = "https"
 		req.URL.Host = c.host
 
 		if req.URL.Path == "/v2/" {
 			log.Printf("passing through /v2/ ping without rewriting")
-		} else if strings.HasPrefix(req.URL.Path, "/v2/") {
-			// This handles /v2/<fakeRepo>/manifests/<tag>
-			parts := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/v2/"), "/", 3)
+			return
+		}
 
-			// Match: /v2/<anything>/manifests/<tag>
-			if len(parts) == 3 && parts[1] == "manifests" {
-				tag := parts[2]
-				log.Printf("⚓ pulling tag: %s", tag)
-
-				// Always map to hardcoded repo with dynamic tag
-				req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", tag)
-			} else if len(parts) == 1 && parts[0] != "" {
-				// Handle docker pull get.kubefor.ge/<tag> (with no /v2/ suffix)
-				log.Printf("⚓ pulling tag: %s", parts[0])
-				req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", parts[0])
-			} else {
-				req.URL.Path = "/v2/kubenote/kubeforge"
-			}
+		// Match: /v2/<repo>/manifests/<tag>
+		parts := strings.Split(strings.TrimPrefix(req.URL.Path, "/v2/"), "/")
+		if len(parts) >= 3 && parts[1] == "manifests" {
+			tag := parts[0] // repo name is being used as the tag
+			log.Printf("⚓ pulling tag: %s", tag)
+			req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", tag)
+		} else if len(parts) >= 2 && parts[0] != "" {
+			// fallback for blobs/layers
+			req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/%s/%s", parts[1], parts[2])
+		} else {
+			req.URL.Path = "/v2/kubenote/kubeforge"
 		}
 
 		log.Printf("rewrote url: %s into %s", orig, req.URL)
