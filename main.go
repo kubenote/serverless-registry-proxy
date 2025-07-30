@@ -125,16 +125,21 @@ func tokenProxyHandler(tokenEndpoint string) http.HandlerFunc {
 			if scope == "" {
 				return
 			}
-			newScope := strings.Replace(scope, "repository:", "repository:kubenote/kubeforge", 1)
+
+			// Ensure full override of the repository scope
+			newScope := "repository:kubenote/kubeforge:pull"
 			q.Set("scope", newScope)
+
 			u, _ := url.Parse(tokenEndpoint)
 			u.RawQuery = q.Encode()
 			r.URL = u
-			log.Printf("tokenProxyHandler: rewrote url:%s into:%s", orig, r.URL)
 			r.Host = u.Host
+
+			log.Printf("tokenProxyHandler: rewrote url:%s into:%s", orig, r.URL)
 		},
 	}).ServeHTTP
 }
+
 
 func browserRedirectHandler(cfg registryConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
