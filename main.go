@@ -132,7 +132,7 @@ func tokenProxyHandler(tokenEndpoint string) http.HandlerFunc {
 
 			u, _ := url.Parse(tokenEndpoint)
 			u.RawQuery = q.Encode()
-			r.URL = u
+			r.URL = orig
 			r.Host = u.Host
 
 			log.Printf("tokenProxyHandler: rewrote url:%s into:%s", orig, r.URL)
