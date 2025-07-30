@@ -66,6 +66,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+
 	if browserRedirects {
 		mux.Handle("/", browserRedirectHandler(reg))
 	}
@@ -75,7 +76,7 @@ func main() {
 	mux.Handle("/v2/", registryAPIProxy(reg, auth))
 
 	addr := fmt.Sprintf("%s:%s", host, port)
-	handler := captureHostHeader(mux)
+	handler := loggingMiddleware(captureHostHeader(mux))
 	log.Printf("starting to listen on %s", addr)
 	if cert, key := os.Getenv("TLS_CERT"), os.Getenv("TLS_KEY"); cert != "" && key != "" {
 		err = http.ListenAndServeTLS(addr, cert, key, handler)
@@ -87,6 +88,13 @@ func main() {
 	}
 
 	log.Printf("server shutdown successfully")
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[INCOMING] %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func discoverTokenService(registryHost string) (string, error) {
