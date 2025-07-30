@@ -1,3 +1,18 @@
+/*
+Copyright 2020 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 package main
 
 import (
@@ -12,7 +27,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"time"
 )
 
 const (
@@ -20,8 +34,8 @@ const (
 )
 
 var (
-	re    = regexp.MustCompile(`^/v2/`)
-	realm = regexp.MustCompile(`realm="(.*?)"`)
+	re                 = regexp.MustCompile(`^/v2/`)
+	realm              = regexp.MustCompile(`realm="(.*?)"`)
 )
 
 type myContextKey string
@@ -32,54 +46,44 @@ type registryConfig struct {
 }
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("[INIT] Starting container registry reverse proxy")
-
 	host := os.Getenv("HOST")
-	log.Printf("[ENV] HOST=%s", host)
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		log.Fatal("[ERROR] PORT environment variable not specified")
+		log.Fatal("PORT environment variable not specified")
 	}
-	log.Printf("[ENV] PORT=%s", port)
-
 	browserRedirects := os.Getenv("DISABLE_BROWSER_REDIRECTS") == ""
-	log.Printf("[CONFIG] Browser redirects enabled: %v", browserRedirects)
 
 	registryHost := os.Getenv("REGISTRY_HOST")
 	if registryHost == "" {
-		log.Fatal("[ERROR] REGISTRY_HOST environment variable not specified (example: gcr.io)")
+		log.Fatal("REGISTRY_HOST environment variable not specified (example: gcr.io)")
 	}
-	log.Printf("[ENV] REGISTRY_HOST=%s", registryHost)
-
 	repoPrefix := os.Getenv("REPO_PREFIX")
 	if repoPrefix == "" {
-		log.Fatal("[ERROR] REPO_PREFIX environment variable not specified")
+		log.Fatal("REPO_PREFIX environment variable not specified")
 	}
-	log.Printf("[ENV] REPO_PREFIX=%s", repoPrefix)
 
-	reg := registryConfig{host: registryHost, repoPrefix: repoPrefix}
+	reg := registryConfig{
+		host:       registryHost,
+		repoPrefix: repoPrefix,
+	}
 
 	tokenEndpoint, err := discoverTokenService(reg.host)
 	if err != nil {
-		log.Fatalf("[ERROR] Token endpoint discovery failed: %+v", err)
+		log.Fatalf("target registry's token endpoint could not be discovered: %+v", err)
 	}
-	log.Printf("[DISCOVERY] Token endpoint: %s", tokenEndpoint)
+	log.Printf("discovered token endpoint for backend registry: %s", tokenEndpoint)
 
 	var auth authenticator
 	if basic := os.Getenv("AUTH_HEADER"); basic != "" {
-		log.Println("[AUTH] Using AUTH_HEADER for basic auth")
 		auth = authHeader(basic)
 	} else if gcpKey := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"); gcpKey != "" {
 		b, err := ioutil.ReadFile(gcpKey)
 		if err != nil {
-			log.Fatalf("[ERROR] Could not read GCP key file from %s: %+v", gcpKey, err)
+			log.Fatalf("could not read key file from %s: %+v", gcpKey, err)
 		}
-		log.Printf("[AUTH] Using service account json from %s", gcpKey)
+		log.Printf("using specified service account json key to authenticate proxied requests")
 		auth = authHeader("Basic " + base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("_json_key:%s", string(b)))))
-	} else {
-		log.Println("[AUTH] No authentication provided. Requests will be unauthenticated.")
 	}
 
 	mux := http.NewServeMux()
@@ -92,59 +96,59 @@ func main() {
 	mux.Handle("/v2/", registryAPIProxy(reg, auth))
 
 	addr := fmt.Sprintf("%s:%s", host, port)
-	log.Printf("[SERVER] Listening on %s", addr)
 	handler := captureHostHeader(mux)
+	log.Printf("starting to listen on %s", addr)
 	if cert, key := os.Getenv("TLS_CERT"), os.Getenv("TLS_KEY"); cert != "" && key != "" {
 		err = http.ListenAndServeTLS(addr, cert, key, handler)
 	} else {
 		err = http.ListenAndServe(addr, handler)
 	}
 	if err != http.ErrServerClosed {
-		log.Fatalf("[FATAL] Server listen error: %+v", err)
+		log.Fatalf("listen error: %+v", err)
 	}
-	log.Println("[SERVER] Shutdown completed")
+
+	log.Printf("server shutdown successfully")
 }
 
 func discoverTokenService(registryHost string) (string, error) {
 	url := fmt.Sprintf("https://%s/v2/", registryHost)
-	log.Printf("[DISCOVERY] Requesting token service from %s", url)
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("failed GET to %s: %+v", url, err)
+		return "", fmt.Errorf("failed to query the registry host %s: %+v", registryHost, err)
 	}
-	defer resp.Body.Close()
-	log.Printf("[DISCOVERY] Response status: %s", resp.Status)
-
 	hdr := resp.Header.Get("www-authenticate")
-	log.Printf("[DISCOVERY] Www-Authenticate header: %s", hdr)
 	if hdr == "" {
-		return "", fmt.Errorf("www-authenticate header missing from %s response", url)
+		return "", fmt.Errorf("www-authenticate header not returned from %s, cannot locate token endpoint", url)
 	}
 	matches := realm.FindStringSubmatch(hdr)
 	if len(matches) == 0 {
-		return "", fmt.Errorf("realm not found in Www-Authenticate header: %s", hdr)
+		return "", fmt.Errorf("cannot locate 'realm' in %s response header www-authenticate: %s", url, hdr)
 	}
 	return matches[1], nil
 }
 
+// captureHostHeader is a middleware to capture Host header in a context key.
 func captureHostHeader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		ctx := context.WithValue(req.Context(), ctxKeyOriginalHost, req.Host)
-		log.Printf("[REQUEST] Captured host header: %s", req.Host)
 		req = req.WithContext(ctx)
 		next.ServeHTTP(rw, req.WithContext(ctx))
 	})
 }
 
+// tokenProxyHandler proxies the token requests to the specified token service.
+// It adjusts the ?scope= parameter in the query from "repository:foo:..." to
+// "repository:repoPrefix/foo:.." and reverse proxies the query to the specified
+// tokenEndpoint.
 func tokenProxyHandler(tokenEndpoint, repoPrefix string) http.HandlerFunc {
 	return (&httputil.ReverseProxy{
 		FlushInterval: -1,
 		Director: func(r *http.Request) {
 			orig := r.URL.String()
+
 			q := r.URL.Query()
 			scope := q.Get("scope")
 			if scope == "" {
-				log.Printf("[TOKEN] No scope found in request: %s", orig)
 				return
 			}
 			newScope := strings.Replace(scope, "repository:", fmt.Sprintf("repository:%s/", repoPrefix), 1)
@@ -152,20 +156,24 @@ func tokenProxyHandler(tokenEndpoint, repoPrefix string) http.HandlerFunc {
 			u, _ := url.Parse(tokenEndpoint)
 			u.RawQuery = q.Encode()
 			r.URL = u
+			log.Printf("tokenProxyHandler: rewrote url:%s into:%s", orig, r.URL)
 			r.Host = u.Host
-			log.Printf("[TOKEN] Rewrote URL: %s => %s", orig, r.URL.String())
 		},
 	}).ServeHTTP
 }
 
+// browserRedirectHandler redirects a request like example.com/my-image to
+// REGISTRY_HOST/my-image, which shows a public UI for browsing the registry.
+// This works only on registries that support a web UI when the image name is
+// entered into the browser, like GCR (gcr.io/google-containers/busybox).
 func browserRedirectHandler(cfg registryConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		redirectURL := fmt.Sprintf("https://%s/%s%s", cfg.host, cfg.repoPrefix, r.RequestURI)
-		log.Printf("[REDIRECT] Browser request %s => %s", r.RequestURI, redirectURL)
-		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+		url := fmt.Sprintf("https://%s/%s%s", cfg.host, cfg.repoPrefix, r.RequestURI)
+		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 	}
 }
 
+// registryAPIProxy returns a reverse proxy to the specified registry.
 func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 	return (&httputil.ReverseProxy{
 		FlushInterval: -1,
@@ -176,6 +184,8 @@ func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 	}).ServeHTTP
 }
 
+// rewriteRegistryV2URL rewrites request.URL like /v2/* that come into the server
+// into https://[GCR_HOST]/v2/[PROJECT_ID]/*. It leaves /v2/ as is.
 func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 	return func(req *http.Request) {
 		u := req.URL.String()
@@ -185,7 +195,7 @@ func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 		if req.URL.Path != "/v2/" {
 			req.URL.Path = re.ReplaceAllString(req.URL.Path, fmt.Sprintf("/v2/%s/", c.repoPrefix))
 		}
-		log.Printf("[REWRITE] URL: %s => %s", u, req.URL.String())
+		log.Printf("rewrote url: %s into %s", u, req.URL)
 	}
 }
 
@@ -194,49 +204,47 @@ type registryRoundtripper struct {
 }
 
 func (rrt *registryRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	log.Printf("[ROUNDTRIP] Request: %s %s", req.Method, req.URL.String())
+	log.Printf("request received. url=%s", req.URL)
 
 	if rrt.auth != nil {
-		header := rrt.auth.AuthHeader()
-		log.Printf("[AUTH] Setting Authorization header: %s", header[:16]+"...")
-		req.Header.Set("Authorization", header)
+		req.Header.Set("Authorization", rrt.auth.AuthHeader())
 	}
 
-	if origHost, ok := req.Context().Value(ctxKeyOriginalHost).(string); ok {
-		ua := req.Header.Get("user-agent")
-		if ua != "" {
-			req.Header.Set("user-agent", "gcr-proxy/0.1 customDomain/"+origHost+" "+ua)
-		}
+	origHost := req.Context().Value(ctxKeyOriginalHost).(string)
+	if ua := req.Header.Get("user-agent"); ua != "" {
+		req.Header.Set("user-agent", "gcr-proxy/0.1 customDomain/"+origHost+" "+ua)
 	}
 
-	start := time.Now()
 	resp, err := http.DefaultTransport.RoundTrip(req)
-	log.Printf("[ROUNDTRIP] Duration: %s", time.Since(start))
-	if err != nil {
-		log.Printf("[ERROR] Request failed: %+v", err)
+	if err == nil {
+		log.Printf("request completed (status=%d) url=%s", resp.StatusCode, req.URL)
+	} else {
+		log.Printf("request failed with error: %+v", err)
 		return nil, err
 	}
 
-	log.Printf("[ROUNDTRIP] Response: %d %s", resp.StatusCode, resp.Status)
-
+	// Google Artifact Registry sends a "location: /artifacts-downloads/..." URL
+	// to download blobs. We don't want these routed to the proxy itself.
 	if locHdr := resp.Header.Get("location"); req.Method == http.MethodGet &&
 		resp.StatusCode == http.StatusFound && strings.HasPrefix(locHdr, "/") {
-		newLoc := req.URL.Scheme + "://" + req.URL.Host + locHdr
-		resp.Header.Set("location", newLoc)
-		log.Printf("[REDIRECT] Rewrote redirect location: %s", newLoc)
+		resp.Header.Set("location", req.URL.Scheme+"://"+req.URL.Host+locHdr)
 	}
 
-	updateTokenEndpoint(resp, req.Host)
+	updateTokenEndpoint(resp, origHost)
 	return resp, nil
 }
 
+// updateTokenEndpoint modifies the response header like:
+//    Www-Authenticate: Bearer realm="https://auth.docker.io/token",service="registry.docker.io"
+// to point to the https://host/token endpoint to force using local token
+// endpoint proxy.
 func updateTokenEndpoint(resp *http.Response, host string) {
 	v := resp.Header.Get("www-authenticate")
-	if v != "" {
-		newVal := realm.ReplaceAllString(v, fmt.Sprintf(`realm="https://%s/_token"`, host))
-		resp.Header.Set("www-authenticate", newVal)
-		log.Printf("[TOKEN] Updated Www-Authenticate header: %s", newVal)
+	if v == "" {
+		return
 	}
+	cur := fmt.Sprintf("https://%s/_token", host)
+	resp.Header.Set("www-authenticate", realm.ReplaceAllString(v, fmt.Sprintf(`realm="%s"`, cur)))
 }
 
 type authenticator interface {
