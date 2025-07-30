@@ -61,6 +61,8 @@ func main() {
 	if repoPrefix == "" {
 		log.Fatal("REPO_PREFIX environment variable not specified")
 	}
+	log.Printf("using REPO_PREFIX: %s", repoPrefix)
+
 
 	reg := registryConfig{
 		host:       registryHost,
