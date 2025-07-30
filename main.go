@@ -68,7 +68,16 @@ func main() {
 	mux := http.NewServeMux()
 
 	if browserRedirects {
-		mux.Handle("/", browserRedirectHandler(reg))
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			segments := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+			if len(segments) == 1 && segments[0] != "" {
+				tag := segments[0]
+				// Construct a Docker registry API call for the hardcoded image with the given tag
+				http.Redirect(w, r, fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", tag), http.StatusTemporaryRedirect)
+				return
+			}
+			browserRedirectHandler(reg)(w, r)
+		})
 	}
 	if tokenEndpoint != "" {
 		mux.Handle("/_token", tokenProxyHandler(tokenEndpoint))
@@ -153,7 +162,6 @@ func tokenProxyHandler(tokenEndpoint string) http.HandlerFunc {
 	}).ServeHTTP
 }
 
-
 func browserRedirectHandler(cfg registryConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		url := fmt.Sprintf("https://%s/kubenote/kubeforge%s", cfg.host, r.RequestURI)
@@ -223,7 +231,7 @@ func (rrt *registryRoundtripper) RoundTrip(req *http.Request) (*http.Response, e
 
 	if locHdr := resp.Header.Get("location"); req.Method == http.MethodGet &&
 		resp.StatusCode == http.StatusFound && strings.HasPrefix(locHdr, "/") {
-		resp.Header.Set("location", req.URL.Scheme+"://"+req.URL.Host+locHdr)
+		resp.Header.Set("location", req.URL.Scheme+":"+"//"+req.URL.Host+locHdr)
 	}
 
 	updateTokenEndpoint(resp, origHost)
