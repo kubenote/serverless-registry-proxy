@@ -34,6 +34,7 @@ const (
 )
 
 var (
+	re                 = regexp.MustCompile(`^/v2/`)
 	realm              = regexp.MustCompile(`realm="(.*?)"`)
 )
 
@@ -61,8 +62,6 @@ func main() {
 	if repoPrefix == "" {
 		log.Fatal("REPO_PREFIX environment variable not specified")
 	}
-	log.Printf("using REPO_PREFIX: %s", repoPrefix)
-
 
 	reg := registryConfig{
 		host:       registryHost,
@@ -187,48 +186,65 @@ func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 
 // rewriteRegistryV2URL rewrites request.URL like /v2/* that come into the server
 // into https://[GCR_HOST]/v2/[PROJECT_ID]/*. It leaves /v2/ as is.
-func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
+func rewriteRegistryV2URL(_ registryConfig) func(*http.Request) {
 	return func(req *http.Request) {
 		original := req.URL.String()
 
-		req.Host = c.host
+		req.Host = "ghcr.io"
 		req.URL.Scheme = "https"
-		req.URL.Host = c.host
+		req.URL.Host = "ghcr.io"
 
-		// Force every path to hit kubenote/kubeforge
-		// Example: /v2/ → /v2/kubenote/kubeforge
-		//          /v2/... → /v2/kubenote/kubeforge/...
-		prefix := "/v2/"
-		suffix := strings.TrimPrefix(req.URL.Path, prefix)
-		req.URL.Path = fmt.Sprintf("%s%s/%s", prefix, c.repoPrefix, suffix)
+		// Determine the operation (e.g., manifest, blob)
+		if strings.Contains(req.URL.Path, "/manifests/") {
+			req.URL.Path = "/v2/kubenote/kubeforge/manifests/latest"
+		} else if strings.Contains(req.URL.Path, "/blobs/") {
+			// Extract the blob digest from the original path
+			parts := strings.Split(req.URL.Path, "/blobs/")
+			if len(parts) == 2 {
+				req.URL.Path = "/v2/kubenote/kubeforge/blobs/" + parts[1]
+			} else {
+				req.URL.Path = "/v2/kubenote/kubeforge/blobs/"
+			}
+		} else {
+			// Default to just /v2/kubenote/kubeforge/
+			req.URL.Path = "/v2/kubenote/kubeforge/"
+		}
 
-		log.Printf("[proxy] forcibly rewrote url: %s → %s", original, req.URL)
+		log.Printf("[proxy] fully hardcoded url: %s → %s", original, req.URL)
 	}
 }
 
 
-type registryRoundtripper struct {
-	auth authenticator
-}
 
 func (rrt *registryRoundtripper) RoundTrip(req *http.Request) (*http.Response, error) {
-    // Log full request
-    dump, err := httputil.DumpRequestOut(req, true)
-    if err == nil {
-        log.Printf("REQUEST:\n%s", dump)
-    }
+	log.Printf("request received. url=%s", req.URL)
 
-    resp, err := http.DefaultTransport.RoundTrip(req)
+	if rrt.auth != nil {
+		req.Header.Set("Authorization", rrt.auth.AuthHeader())
+	}
 
-    // Log full response
-    if err == nil {
-        resDump, _ := httputil.DumpResponse(resp, true)
-        log.Printf("RESPONSE:\n%s", resDump)
-    } else {
-        log.Printf("request failed with error: %+v", err)
-    }
+	origHost := req.Context().Value(ctxKeyOriginalHost).(string)
+	if ua := req.Header.Get("user-agent"); ua != "" {
+		req.Header.Set("user-agent", "gcr-proxy/0.1 customDomain/"+origHost+" "+ua)
+	}
 
-    return resp, err
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err == nil {
+		log.Printf("request completed (status=%d) url=%s", resp.StatusCode, req.URL)
+	} else {
+		log.Printf("request failed with error: %+v", err)
+		return nil, err
+	}
+
+	// Google Artifact Registry sends a "location: /artifacts-downloads/..." URL
+	// to download blobs. We don't want these routed to the proxy itself.
+	if locHdr := resp.Header.Get("location"); req.Method == http.MethodGet &&
+		resp.StatusCode == http.StatusFound && strings.HasPrefix(locHdr, "/") {
+		resp.Header.Set("location", req.URL.Scheme+"://"+req.URL.Host+locHdr)
+	}
+
+	updateTokenEndpoint(resp, origHost)
+	return resp, nil
 }
 
 // updateTokenEndpoint modifies the response header like:
