@@ -41,7 +41,6 @@ type myContextKey string
 
 type registryConfig struct {
 	host       string
-	repoPrefix string
 }
 
 func main() {
@@ -57,16 +56,10 @@ func main() {
 	if registryHost == "" {
 		log.Fatal("REGISTRY_HOST environment variable not specified (example: gcr.io)")
 	}
-	repoPrefix := os.Getenv("REPO_PREFIX")
-	if repoPrefix == "" {
-		log.Fatal("REPO_PREFIX environment variable not specified")
-	}
-	log.Printf("using REPO_PREFIX: %s", repoPrefix)
 
 
 	reg := registryConfig{
 		host:       registryHost,
-		repoPrefix: repoPrefix,
 	}
 
 	tokenEndpoint, err := discoverTokenService(reg.host)
@@ -92,7 +85,7 @@ func main() {
 		mux.Handle("/", browserRedirectHandler(reg))
 	}
 	if tokenEndpoint != "" {
-		mux.Handle("/_token", tokenProxyHandler(tokenEndpoint, repoPrefix))
+		mux.Handle("/_token", tokenProxyHandler(tokenEndpoint))
 	}
 	mux.Handle("/v2/", registryAPIProxy(reg, auth))
 
@@ -137,42 +130,18 @@ func captureHostHeader(next http.Handler) http.Handler {
 	})
 }
 
-// tokenProxyHandler proxies the token requests to the specified token service.
-// It adjusts the ?scope= parameter in the query from "repository:foo:..." to
-// "repository:repoPrefix/foo:.." and reverse proxies the query to the specified
-// tokenEndpoint.
-func tokenProxyHandler(tokenEndpoint, repoPrefix string) http.HandlerFunc {
-	return (&httputil.ReverseProxy{
-		FlushInterval: -1,
-		Director: func(r *http.Request) {
-			orig := r.URL.String()
-
-			q := r.URL.Query()
-			scope := q.Get("scope")
-			if scope == "" {
-				return
-			}
-			newScope := strings.Replace(scope, "repository:", fmt.Sprintf("repository:%s/", repoPrefix), 1)
-			q.Set("scope", newScope)
-			u, _ := url.Parse(tokenEndpoint)
-			u.RawQuery = q.Encode()
-			r.URL = u
-			log.Printf("tokenProxyHandler: rewrote url:%s into:%s", orig, r.URL)
-			r.Host = u.Host
-		},
-	}).ServeHTTP
-}
 
 // browserRedirectHandler redirects a request like example.com/my-image to
 // REGISTRY_HOST/my-image, which shows a public UI for browsing the registry.
 // This works only on registries that support a web UI when the image name is
 // entered into the browser, like GCR (gcr.io/google-containers/busybox).
-func browserRedirectHandler(cfg registryConfig) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		url := fmt.Sprintf("https://%s/%s%s", cfg.host, cfg.repoPrefix, r.RequestURI)
-		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
-	}
+func browserRedirectHandler() http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        // Redirect all browser hits to the GitHub container package UI (optional)
+        http.Redirect(w, r, "https://github.com/kubenote/KubeForge/pkgs/container/kubeforge", http.StatusTemporaryRedirect)
+    }
 }
+
 
 // registryAPIProxy returns a reverse proxy to the specified registry.
 func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
@@ -188,31 +157,30 @@ func registryAPIProxy(cfg registryConfig, auth authenticator) http.HandlerFunc {
 // rewriteRegistryV2URL rewrites request.URL like /v2/* that come into the server
 // into https://[GCR_HOST]/v2/[PROJECT_ID]/*. It leaves /v2/ as is.
 func rewriteRegistryV2URL(_ registryConfig) func(*http.Request) {
-	return func(req *http.Request) {
-		original := req.URL.String()
+    return func(req *http.Request) {
+        original := req.URL.String()
 
-		req.Host = "ghcr.io"
-		req.URL.Scheme = "https"
-		req.URL.Host = "ghcr.io"
+        req.Host = "ghcr.io"
+        req.URL.Scheme = "https"
+        req.URL.Host = "ghcr.io"
 
-		// Determine the operation (e.g., manifest, blob)
-		if strings.Contains(req.URL.Path, "/manifests/") {
-			req.URL.Path = "/v2/kubenote/kubeforge/manifests/latest"
-		} else if strings.Contains(req.URL.Path, "/blobs/") {
-			// Extract the blob digest from the original path
-			parts := strings.Split(req.URL.Path, "/blobs/")
-			if len(parts) == 2 {
-				req.URL.Path = "/v2/kubenote/kubeforge/blobs/" + parts[1]
-			} else {
-				req.URL.Path = "/v2/kubenote/kubeforge/blobs/"
-			}
-		} else {
-			// Default to just /v2/kubenote/kubeforge/
-			req.URL.Path = "/v2/kubenote/kubeforge/"
-		}
+        if strings.Contains(req.URL.Path, "/manifests/") {
+            // Always redirect manifest pulls to latest
+            req.URL.Path = "/v2/kubenote/kubeforge/manifests/latest"
+        } else if strings.Contains(req.URL.Path, "/blobs/") {
+            // Preserve blob digest
+            parts := strings.Split(req.URL.Path, "/blobs/")
+            if len(parts) == 2 {
+                req.URL.Path = "/v2/kubenote/kubeforge/blobs/" + parts[1]
+            } else {
+                req.URL.Path = "/v2/kubenote/kubeforge/blobs/"
+            }
+        } else {
+            req.URL.Path = "/v2/kubenote/kubeforge/"
+        }
 
-		log.Printf("[proxy] fully hardcoded url: %s → %s", original, req.URL)
-	}
+        log.Printf("[proxy] fully hardcoded url: %s → %s", original, req.URL)
+    }
 }
 
 
@@ -241,18 +209,7 @@ func (rrt *registryRoundtripper) RoundTrip(req *http.Request) (*http.Response, e
     return resp, err
 }
 
-// updateTokenEndpoint modifies the response header like:
-//    Www-Authenticate: Bearer realm="https://auth.docker.io/token",service="registry.docker.io"
-// to point to the https://host/token endpoint to force using local token
-// endpoint proxy.
-func updateTokenEndpoint(resp *http.Response, host string) {
-	v := resp.Header.Get("www-authenticate")
-	if v == "" {
-		return
-	}
-	cur := fmt.Sprintf("https://%s/_token", host)
-	resp.Header.Set("www-authenticate", realm.ReplaceAllString(v, fmt.Sprintf(`realm="%s"`, cur)))
-}
+
 
 type authenticator interface {
 	AuthHeader() string
