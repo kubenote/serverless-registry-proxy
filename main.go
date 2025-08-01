@@ -194,7 +194,6 @@ func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 		// Match: /v2/<repo>/manifests/<tag>
 		parts := strings.Split(strings.TrimPrefix(req.URL.Path, "/v2/"), "/")
 		if len(parts) >= 3 && parts[1] == "manifests" {
-			repo := parts[0]
 			identifier := parts[2] // could be a tag or digest
 		
 			if strings.HasPrefix(identifier, "sha256:") {
