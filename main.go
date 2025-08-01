@@ -194,9 +194,16 @@ func rewriteRegistryV2URL(c registryConfig) func(*http.Request) {
 		// Match: /v2/<repo>/manifests/<tag>
 		parts := strings.Split(strings.TrimPrefix(req.URL.Path, "/v2/"), "/")
 		if len(parts) >= 3 && parts[1] == "manifests" {
-			tag := parts[0] // repo name is being used as the tag
-			log.Printf("⚓ pulling tag: %s", tag)
-			req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", tag)
+			repo := parts[0]
+			identifier := parts[2] // could be a tag or digest
+		
+			if strings.HasPrefix(identifier, "sha256:") {
+				log.Printf("📦 pulling by digest: %s", identifier)
+				req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", identifier)
+			} else {
+				log.Printf("⚓ pulling tag: %s", identifier)
+				req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/manifests/%s", identifier)
+			}
 		} else if len(parts) >= 2 && parts[0] != "" {
 			// fallback for blobs/layers
 			req.URL.Path = fmt.Sprintf("/v2/kubenote/kubeforge/%s/%s", parts[1], parts[2])
